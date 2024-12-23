@@ -233,6 +233,17 @@ class GCIQLAgent(flax.struct.PyTreeNode):
             )
 
         return metrics
+    
+    @jax.jit
+    def value_function(self, observations, goals):
+        
+        v = self.state.apply_fn(
+            {"params": self.state.params},
+            (observations, goals),
+            name="value",
+        )
+        return v
+        
 
     @classmethod
     def create(

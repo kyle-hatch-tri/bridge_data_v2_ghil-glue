@@ -2,20 +2,25 @@ from ml_collections import ConfigDict
 
 
 def get_config(config_string):
+    dataset, algo, variant = config_string.split("_")
+    variant = variant.split("-")
+
     base_real_config = dict(
         batch_size=256,
-        num_steps=int(2e6),
-        log_interval=100,
-        eval_interval=5000,
-        save_interval=5000,
-        save_dir="path/to/save/dir",
-        data_path="path/to/data",
+        num_val_batches=8,
+        num_steps=600_000, 
+        log_interval=1000,
+        eval_interval=50_000,
+        save_interval=50_000,
+        save_dir="<path to save dir>",
+        data_path="<path_to_data_dir>",
+        dataset_name=dataset,
         resume_path=None,
         seed=42,
     )
 
     base_data_config = dict(
-        shuffle_buffer_size=25000,
+        shuffle_buffer_size=25_000,
         augment=True,
         augment_next_obs_goal_differently=False,
         augment_kwargs=dict(
@@ -35,7 +40,7 @@ def get_config(config_string):
     )
 
     possible_structures = {
-        "gc_iql": ConfigDict(
+        "gciql": ConfigDict(
             dict(
                 agent="gc_iql",
                 agent_kwargs=dict(
@@ -69,7 +74,7 @@ def get_config(config_string):
                 **base_real_config,
             )
         ),
-        "gc_bc": ConfigDict(
+        "gcbc": ConfigDict(
             dict(
                 agent="gc_bc",
                 agent_kwargs=dict(
@@ -99,7 +104,7 @@ def get_config(config_string):
                 **base_real_config,
             )
         ),
-        "lc_bc": ConfigDict(
+        "lcbc": ConfigDict(
             dict(
                 agent="lc_bc",
                 agent_kwargs=dict(
@@ -133,7 +138,7 @@ def get_config(config_string):
                 **base_real_config,
             )
         ),
-        "gc_ddpm_bc": ConfigDict(
+        "gcdiffusion": ConfigDict(
             dict(
                 agent="gc_ddpm_bc",
                 agent_kwargs=dict(
@@ -156,11 +161,11 @@ def get_config(config_string):
                     actor_decay_steps=int(2e6),
                 ),
                 dataset_kwargs=dict(
-                    goal_relabeling_strategy="uniform",
-                    goal_relabeling_kwargs=dict(reached_proportion=0.0),
+                    goal_relabeling_strategy="delta_goals",
+                    goal_relabeling_kwargs=dict(goal_delta=[0, 24]),
                     relabel_actions=True,
                     obs_horizon=1,
-                    act_pred_horizon=1,
+                    act_pred_horizon=4,
                     **base_data_config,
                 ),
                 encoder="resnetv1-34-bridge",
@@ -170,7 +175,86 @@ def get_config(config_string):
                 **base_real_config,
             )
         ),
-        "contrastive_rl_td": ConfigDict(
+        "lcdiffusion": ConfigDict(
+            dict(
+                agent="gc_ddpm_bc",
+                agent_kwargs=dict(
+                    score_network_kwargs=dict(
+                        time_dim=32,
+                        num_blocks=3,
+                        dropout_rate=0.1,
+                        hidden_dim=256,
+                        use_layer_norm=True,
+                    ),
+                    language_conditioned=True,
+                    early_goal_concat=False,
+                    shared_goal_encoder=False,
+                    use_proprio=False,
+                    beta_schedule="cosine",
+                    diffusion_steps=20,
+                    action_samples=1,
+                    repeat_last_step=0,
+                    learning_rate=3e-4,
+                    warmup_steps=2000,
+                    actor_decay_steps=int(2e6),
+                ),
+                dataset_kwargs=dict(
+                    goal_relabeling_strategy="delta_goals",
+                    goal_relabeling_kwargs=dict(goal_delta=[0, 20]), # This value doesn't matter since it is always the same language instruction
+                    load_language=True,
+                    skip_unlabeled=True,
+                    relabel_actions=True,
+                    obs_horizon=1,
+                    act_pred_horizon=4,
+                    **base_data_config,
+                ),
+                encoder="resnetv1-34-bridge",
+                encoder_kwargs=dict(
+                    pooling_method="avg", add_spatial_coordinates=True, act="swish"
+                ),
+                **base_real_config,
+            )
+        ),
+        "lcgcprogressvf": ConfigDict(
+            dict(
+                agent="lcgc_progress_vf",
+                agent_kwargs = dict(
+                    network_kwargs=dict(
+                        dropout_rate=0.1,
+                        hidden_dims=[256, 256],
+                        use_layer_norm=True,
+                    ),
+                    early_goal_concat=False,
+                    shared_goal_encoder=False,
+                    use_proprio=False,
+                    learning_rate=3e-4,
+                    warmup_steps=2000,
+
+                    frac_pos=0.5,
+                    frac_neg_wrong_lang=0.2,
+                    frac_neg_reverse_direction=0.2,
+                    frac_neg_wrong_goalimg=0.1,
+
+                    loss_fn="bce",
+                ),
+                dataset_kwargs=dict(
+                    goal_relabeling_strategy="delta_goals2",
+                    goal_relabeling_kwargs=dict(goal_delta=[16, 24]),
+                    relabel_actions=True,
+                    load_language=True,
+                    skip_unlabeled=True,
+                    obs_horizon=None,
+                    act_pred_horizon=None,
+                    **base_data_config,
+                ),
+                encoder="resnetv1-34-bridge",
+                encoder_kwargs=dict(
+                    pooling_method="avg", add_spatial_coordinates=True, act="swish"
+                ),
+                **base_real_config,
+            )
+        ),
+        "contrastiverltd": ConfigDict(
             dict(
                 agent="stable_contrastive_rl",
                 agent_kwargs=dict(
@@ -214,4 +298,70 @@ def get_config(config_string):
         ),
     }
 
-    return possible_structures[config_string]
+    
+
+    config = possible_structures[algo]
+
+    if "lc" in algo:
+        assert algo[:2] == "lc"
+        config["language_conditioned"] = True 
+        config["encoder"] = "resnetv1-34-bridge-film"
+        config["text_processor"] = "muse_embedding"
+        config["text_processor_kwargs"] = dict()
+    else:
+        config["language_conditioned"] = False 
+
+    if "auggoaldiff" in variant:
+        config["dataset_kwargs"]["augment_next_obs_goal_differently"] = True 
+
+    # this arg is currently not implemented for bridge data loader
+    if "noactnorm" in variant:
+        config["dataset_kwargs"]["normalize_actions"] = False
+
+    if "goaldelta20short" in variant:
+        config["dataset_kwargs"]["goal_relabeling_kwargs"]["goal_delta"] = [0, 24]
+
+
+    if "goaldelta20long" in variant:
+        config["dataset_kwargs"]["goal_relabeling_kwargs"]["goal_delta"] = [16, 24]
+        config["dataset_kwargs"]["goal_relabeling_strategy"] = "delta_goals2"
+
+    if "unipi" in variant:
+        assert algo == "gcbc"
+
+
+        config["num_steps"] = 500_000
+        config["eval_interval"] = 25_000
+        config["save_interval"] = 25_000
+
+        config["agent_kwargs"]["network_kwargs"] = dict(
+                                            hidden_dims=(256, 256, 256),
+                                            dropout_rate=0.1,
+                                        )
+        config["agent_kwargs"]["policy_kwargs"] = dict(
+                    tanh_squash_distribution=False,
+                    fixed_std=[1, 1, 1, 1, 1, 1, 1],
+                    state_dependent_std=False,
+                )
+        config["agent_kwargs"]["decay_steps"]= int(2e6)
+
+        
+
+        config["dataset_kwargs"]["goal_relabeling_strategy"] = "delta_goals"
+        config["dataset_kwargs"]["goal_relabeling_kwargs"] = dict(goal_delta=[1, 1])
+        config["dataset_kwargs"]["relabel_actions"] = True
+        config["dataset_kwargs"]["act_pred_horizon"] = None 
+        config["dataset_kwargs"]["obs_horizon"] = None 
+
+
+
+    for batch_size in [1024, 2048, 4096, 8192]:
+        if f"b{batch_size}" in variant:
+            config["batch_size"] = batch_size
+
+    return config
+
+
+if __name__ == "__main__":
+    config = get_config("bridge_gcbc_auggoaldiff-auggoaldiff-unipi")
+    print(config)

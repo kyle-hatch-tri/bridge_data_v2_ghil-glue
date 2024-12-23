@@ -9,8 +9,8 @@ def get_config(config_string):
         log_interval=1000,
         eval_interval=2000,
         save_interval=2000,
-        save_dir="<path_to_save_dir>",
-        data_path="<path_to_goal_conditioned_dataset>",
+        save_dir="<path to save dir>",
+        data_path="<path_to_language_conditioned_dataset>",
         resume_path=None,
         seed=42,
     )
@@ -40,7 +40,7 @@ def get_config(config_string):
     normalization_type = "normal"
 
     possible_structures = {
-        "gc_ddpm_bc": ConfigDict(
+        "lc_ddpm_bc": ConfigDict(
             dict(
                 agent="gc_ddpm_bc",
                 agent_kwargs=dict(
@@ -51,9 +51,9 @@ def get_config(config_string):
                         hidden_dim=256,
                         use_layer_norm=True,
                     ),
-                    #language_conditioned=True,
-                    early_goal_concat=True,
-                    shared_goal_encoder=True,
+                    language_conditioned=True,
+                    early_goal_concat=None,
+                    shared_goal_encoder=None,
                     use_proprio=False,
                     beta_schedule="cosine",
                     diffusion_steps=20,
@@ -65,19 +65,19 @@ def get_config(config_string):
                 ),
                 dataset_kwargs=dict(
                     goal_relabeling_strategy="delta_goals",
-                    goal_relabeling_kwargs=dict(goal_delta=[0, 24]),
+                    goal_relabeling_kwargs=dict(goal_delta=[0, 20]), 
                     #goal_relabeling_strategy="uniform",
                     #goal_relabeling_kwargs=dict(reached_proportion=0.0),
-                    #load_language=True,
-                    #skip_unlabeled=True,
+                    load_language=True, 
+                    skip_unlabeled=True, 
                     relabel_actions=False,
                     act_pred_horizon=4,
                     obs_horizon=1,
                     **base_data_config,
                 ),
-                #text_processor="muse_embedding",
-                #text_processor_kwargs=dict(),
-                encoder="resnetv1-34-bridge",
+                text_processor="muse_embedding", 
+                text_processor_kwargs=dict(), 
+                encoder="resnetv1-34-bridge-film", 
                 encoder_kwargs=dict(
                     pooling_method="avg",
                     add_spatial_coordinates=True,

@@ -8,6 +8,8 @@ from absl import logging
 from jaxrl_m.data.tf_augmentations import augment
 from jaxrl_m.data.tf_goal_relabeling import GOAL_RELABELING_FUNCTIONS
 
+import os
+import time 
 
 def glob_to_path_list(
     glob_strs: Union[str, List[str]], prefix: str = "", exclude: Iterable[str] = ()
@@ -16,7 +18,11 @@ def glob_to_path_list(
     if isinstance(glob_strs, str):
         glob_strs = [glob_strs]
     path_list = []
+
+    time.sleep(5) # This seems to be necessary to avoid some race condition sometimes
+
     for glob_str in glob_strs:
+
         paths = tf.io.gfile.glob(f"{prefix}/{glob_str}")
         filtered_paths = []
         for path in paths:
@@ -24,6 +30,7 @@ def glob_to_path_list(
                 filtered_paths.append(path)
             else:
                 logging.info(f"Excluding {path}")
+
         assert len(filtered_paths) > 0, f"{glob_str} came up empty"
         path_list += filtered_paths
     return path_list
@@ -95,6 +102,10 @@ class CalvinDataset:
         obs_horizon: Optional[int] = None,
         load_language: bool = False,
         skip_unlabeled: bool = False,
+        normalize_actions: bool = True, 
+        use_float64: bool = False, 
+        use_generated_goals: bool = False,
+        use_encode_decode_goals: bool = False,
         **kwargs,
     ):
         logging.warning("Extra kwargs passed to CalvinDataset: %s", kwargs)
@@ -118,9 +129,27 @@ class CalvinDataset:
         self.obs_horizon = obs_horizon
         self.is_train = train
         self.load_language = load_language
+        self.normalize_actions = normalize_actions 
+        self.use_float64 = use_float64 
+        self.use_generated_goals = use_generated_goals 
+        self.use_encode_decode_goals = use_encode_decode_goals 
 
-        if self.load_language:
-            self.PROTO_TYPE_SPEC["language_annotation"] = tf.string
+        if self.use_float64:
+            self.PROTO_TYPE_SPEC = self.PROTO_TYPE_SPEC_FLOAT64 
+        else:
+            self.PROTO_TYPE_SPEC = self.PROTO_TYPE_SPEC_FLOAT32
+
+        if self.use_generated_goals:
+            self.PROTO_TYPE_SPEC["generated_goals"] = tf.uint8
+
+        if self.use_encode_decode_goals:
+            self.PROTO_TYPE_SPEC["encoded_decoded"] = tf.uint8
+            self.PROTO_TYPE_SPEC["noised_encoded_decoded"] = tf.uint8
+        
+
+        if self.load_language: 
+            self.PROTO_TYPE_SPEC["language_annotation"] = tf.string 
+
 
         # construct a dataset for each sub-list of paths
         datasets = []
@@ -182,7 +211,11 @@ class CalvinDataset:
         dataset = dataset.map(self._decode_example, num_parallel_calls=tf.data.AUTOTUNE)
 
         # yields trajectories
-        #dataset = dataset.map(self._process_actions, num_parallel_calls=tf.data.AUTOTUNE) # we're skipping action normalization
+        if self.normalize_actions:
+            print("\n" * 5 + "=" * 30 + " Normalizing actions " + "=" * 30 + "\n" * 5)
+            dataset = dataset.map(self._process_actions, num_parallel_calls=tf.data.AUTOTUNE)
+        else:
+            print("\n" * 5 + "=" * 30 + " Not normalizing actions " + "=" * 30 + "\n" * 5)
 
         # yields trajectories
         dataset = dataset.map(self._chunk_act_obs, num_parallel_calls=tf.data.AUTOTUNE)
@@ -200,9 +233,15 @@ class CalvinDataset:
         return dataset
 
     # the expected type spec for the serialized examples
-    PROTO_TYPE_SPEC = {
+    PROTO_TYPE_SPEC_FLOAT32 = {
         "actions": tf.float32,
         "proprioceptive_states": tf.float32,
+        "image_states": tf.uint8,
+    }
+
+    PROTO_TYPE_SPEC_FLOAT64 = {
+        "actions": tf.float64,
+        "proprioceptive_states": tf.float64,
         "image_states": tf.uint8,
     }
 
@@ -220,7 +259,8 @@ class CalvinDataset:
             else:
                 parsed_tensors[key] = tf.io.parse_tensor(parsed_features[key], dtype)
         # restructure the dictionary into the downstream format
-        return {
+
+        retdict = {
             "observations": {
                 "image": parsed_tensors["image_states"][:-1],
                 "proprio": parsed_tensors["proprioceptive_states"][:-1],
@@ -233,6 +273,19 @@ class CalvinDataset:
             "actions": parsed_tensors["actions"][:-1],
             "terminals": tf.zeros_like(parsed_tensors["actions"][:-1][:, 0:1], dtype=tf.bool)
         }
+
+        if self.use_generated_goals:
+            retdict["generated_goals"] = parsed_tensors["generated_goals"]
+
+        if self.use_encode_decode_goals:
+            retdict["observations"]["encode_decode_image"] = parsed_tensors["encoded_decoded"][:-1]
+            retdict["observations"]["noised_encode_decode_image"] = parsed_tensors["noised_encoded_decoded"][:-1]
+
+            retdict["next_observations"]["encode_decode_image"] = parsed_tensors["encoded_decoded"][1:]
+            retdict["next_observations"]["noised_encode_decode_image"] = parsed_tensors["noised_encoded_decoded"][1:]
+
+        return retdict
+
 
     def _process_actions(self, traj):
         # normalize actions and proprio
@@ -371,14 +424,15 @@ class CalvinDataset:
 
     def _augment(self, seed, image):
         if self.augment_next_obs_goal_differently:
+            print("\n\n" + "=" * 30 + f" self.augment_next_obs_goal_differently: {self.augment_next_obs_goal_differently}" + "=" * 30 + "\n\n")
             sub_seeds = tf.unstack(
                 tf.random.stateless_uniform(
-                    [3, 2], seed=[seed, seed], minval=None, maxval=None, dtype=tf.int32
+                    [4, 2], seed=[seed, seed], minval=None, maxval=None, dtype=tf.int32
                 )
             )
         else:
             # use the same seed for obs, next_obs, and goal
-            sub_seeds = [[seed, seed]] * 3
+            sub_seeds = [[seed, seed]] * 4
 
         for key, sub_seed in zip(
             ["observations", "next_observations", "goals"], sub_seeds

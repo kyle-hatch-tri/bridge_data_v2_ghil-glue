@@ -129,6 +129,10 @@ def main(_):
         tf.io.gfile.join(FLAGS.input_path, *("*" * (FLAGS.depth - 1)))
     )
     paths = [f"{p}/train/out.npy" for p in paths] + [f"{p}/val/out.npy" for p in paths]
+
+    paths = [path for path in paths if os.path.exists(path)]
+
+
     with Pool(FLAGS.num_workers) as p:
         list(tqdm.tqdm(p.imap(process, paths), total=len(paths)))
 

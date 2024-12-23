@@ -44,7 +44,7 @@ def get_config(config_string):
                         "bridge_data_v1/berkeley/?*/?*",
                         "rss/?*/?*/?*",
                         "bridge_data_v2/?*/?*/?*",
-                        "scripted/?*",
+                        # "scripted/?*",
                     ]
                 ],
                 "exclude": [],

@@ -95,6 +95,55 @@ class ContrastiveCritic(nn.Module):
         return outer
 
 
+class ContrastiveValue(nn.Module):
+    encoder: nn.Module
+    sa_net: nn.Module
+    g_net: nn.Module
+    repr_dim: int = 16
+    twin_q: bool = True
+    sa_net2: Optional[nn.Module] = None
+    g_net2: Optional[nn.Module] = None
+    init_final: Optional[float] = None
+
+    @nn.compact
+    def __call__(
+        self, observations: jnp.ndarray, train: bool = False
+    ) -> jnp.ndarray:
+        obs_goal_encoding = self.encoder(observations)
+        encoding_dim = obs_goal_encoding.shape[-1] // 2
+        obs_encoding, goal_encoding = (
+            obs_goal_encoding[..., :encoding_dim],
+            obs_goal_encoding[..., encoding_dim:],
+        )
+
+        if self.init_final is not None:
+            kernel_init = partial(
+                nn.initializers.uniform, -self.init_final, self.init_final
+            )
+        else:
+            kernel_init = default_init
+
+        # sa_inputs = jnp.concatenate([obs_encoding, actions], -1)
+        sa_inputs = obs_encoding
+        sa_repr = self.sa_net(sa_inputs, train=train)
+        sa_repr = self.sa_net(sa_inputs, train=train)
+        sa_repr = nn.Dense(self.repr_dim, kernel_init=kernel_init())(sa_repr)
+        g_repr = self.g_net(goal_encoding, train=train)
+        g_repr = nn.Dense(self.repr_dim, kernel_init=kernel_init())(g_repr)
+        outer = jnp.einsum("ik,jk->ij", sa_repr, g_repr)
+
+        if self.twin_q:
+            sa_repr2 = self.sa_net2(sa_inputs, train=train)
+            sa_repr2 = nn.Dense(self.repr_dim, kernel_init=kernel_init())(sa_repr2)
+            g_repr2 = self.g_net2(goal_encoding, train=train)
+            g_repr2 = nn.Dense(self.repr_dim, kernel_init=kernel_init())(g_repr2)
+            outer2 = jnp.einsum("ik,jk->ij", sa_repr2, g_repr2)
+
+            outer = jnp.stack([outer, outer2], axis=-1)
+
+        return outer
+
+
 def ensemblize(cls, num_qs, out_axes=0):
     return nn.vmap(
         cls,
@@ -148,7 +197,6 @@ class Policy(nn.Module):
             )
 
         return distribution
-
 
 class TanhMultivariateNormalDiag(distrax.Transformed):
     def __init__(

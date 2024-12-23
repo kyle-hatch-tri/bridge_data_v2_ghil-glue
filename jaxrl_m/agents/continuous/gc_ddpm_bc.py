@@ -13,7 +13,7 @@ from flax.core import FrozenDict
 from jaxrl_m.common.typing import Batch
 from jaxrl_m.common.typing import PRNGKey
 from jaxrl_m.common.common import JaxRLTrainState, ModuleDict, nonpytree_field
-from jaxrl_m.common.encoding import GCEncodingWrapper
+from jaxrl_m.common.encoding import GCEncodingWrapper, LCEncodingWrapper
 
 from jaxrl_m.networks.diffusion_nets import (
     FourierFeatures,
@@ -200,6 +200,7 @@ class GCDDPMBCAgent(flax.struct.PyTreeNode):
         repeat_last_step: int = 0,
         target_update_rate=0.002,
         dropout_target_networks=True,
+        language_conditioned=False, 
     ):
         assert len(actions.shape) > 1, "Must use action chunking"
         assert len(observations["image"].shape) > 3, "Must use observation histories"
@@ -213,12 +214,19 @@ class GCDDPMBCAgent(flax.struct.PyTreeNode):
             else:
                 goal_encoder_def = copy.deepcopy(encoder_def)
 
-        encoder_def = GCEncodingWrapper(
-            encoder=encoder_def,
-            goal_encoder=goal_encoder_def,
-            use_proprio=use_proprio,
-            stop_gradient=False,
-        )
+
+        if language_conditioned:
+            print("LCEncodingWrapper")
+            encoder_def = LCEncodingWrapper(
+                encoder=encoder_def, use_proprio=use_proprio, stop_gradient=False
+            )
+        else:
+            encoder_def = GCEncodingWrapper(
+                encoder=encoder_def,
+                goal_encoder=goal_encoder_def,
+                use_proprio=use_proprio,
+                stop_gradient=False,
+            )
 
         networks = {
             "actor": ScoreActor(

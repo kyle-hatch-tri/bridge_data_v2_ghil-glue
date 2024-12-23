@@ -83,6 +83,7 @@ def get_config(config_string):
                         "training/A/?*/?*",
                         "training/B/?*/?*",
                         "training/C/?*/?*"
+
                     ],
                     [
                         "validation/D/?*/?*",
@@ -94,4 +95,8 @@ def get_config(config_string):
             }
         ),
     }
+
+    print("config_string:", config_string)
+    print("possible_structures.keys():", possible_structures.keys())
+
     return possible_structures[config_string]

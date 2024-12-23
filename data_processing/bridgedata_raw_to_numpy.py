@@ -98,7 +98,10 @@ def process_images(path):  # processes images at a trajectory level
 
     images_out = defaultdict(list)
 
-    tlen = len(glob.glob(image_path[0] + "/im_*.jpg"))
+    try:
+        tlen = len(glob.glob(image_path[0] + "/im_*.jpg"))
+    except:
+        import ipdb; ipdb.set_trace()
 
     for i, name in enumerate(names):
         for t in range(tlen):

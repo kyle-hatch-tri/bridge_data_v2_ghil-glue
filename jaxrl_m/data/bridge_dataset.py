@@ -16,6 +16,8 @@ from absl import logging
 from jaxrl_m.data.tf_augmentations import augment
 from jaxrl_m.data.tf_goal_relabeling import GOAL_RELABELING_FUNCTIONS
 
+import sys
+import jax
 
 def glob_to_path_list(
     glob_strs: Union[str, List[str]], prefix: str = "", exclude: Iterable[str] = ()
@@ -254,6 +256,7 @@ class BridgeDataset:
 
         return dataset
 
+
     # the expected type spec for the serialized examples
     PROTO_TYPE_SPEC = {
         "observations/images0": tf.uint8,
@@ -276,6 +279,7 @@ class BridgeDataset:
             key: tf.io.parse_tensor(parsed_features[key], dtype)
             for key, dtype in self.PROTO_TYPE_SPEC.items()
         }
+
         # restructure the dictionary into the downstream format
         return {
             "observations": {
@@ -286,10 +290,10 @@ class BridgeDataset:
                 "image": parsed_tensors["next_observations/images0"],
                 "proprio": parsed_tensors["next_observations/state"],
             },
-            **({"language": parsed_tensors["language"]} if self.load_language else {}),
+            **({"language": parsed_tensors["language"][0]} if self.load_language else {}), 
             "actions": parsed_tensors["actions"],
-            "terminals": parsed_tensors["terminals"],
-            "truncates": parsed_tensors["truncates"],
+            "terminals": tf.expand_dims(parsed_tensors["terminals"], axis=-1), 
+            "truncates": tf.expand_dims(parsed_tensors["truncates"], axis=-1),
         }
 
     def _process_actions(self, traj):
@@ -374,23 +378,70 @@ class BridgeDataset:
         return traj
 
     def _add_goals(self, traj):
+        if self.load_language:
+            lang = traj["language"]
+            traj["language"] = tf.broadcast_to(
+                lang, tf.shape(traj["terminals"])
+            )
+
         traj = GOAL_RELABELING_FUNCTIONS[self.goal_relabeling_strategy](
             traj, **self.goal_relabeling_kwargs
         )
 
         if self.load_language:
-            lang_idx = tf.random.uniform(
-                shape=[], maxval=len(traj["language"]), dtype=tf.int32
-            )
-            lang = traj["language"][lang_idx]
+            lang = traj["language"]
             traj["goals"]["language"] = tf.broadcast_to(
                 lang, tf.shape(traj["terminals"])
             )
             traj.pop("language")
 
+            # always make the "goal" the last obs so that masking is done
+            # properly below
+            traj_len = tf.shape(traj["goal_dists"])[0]
+            traj["goal_dists"] = traj_len - tf.range(traj_len)
+
         # after goal relabeling, we can set actions and obs to chunked version
         if "action_chunks" in traj:
             traj["actions"] = traj.pop("action_chunks")
+            # set movement actions to 0 after the goal is reached
+            new_movement = tf.where(
+                (
+                    traj["goal_dists"][:, None, None]
+                    > tf.range(self.act_pred_horizon)[None, :, None]
+                ),  # shape (traj_len, act_pred_horizon, 1)
+                traj["actions"][
+                    :, :, :-1
+                ],  # shape (traj_len, act_pred_horizon, action_dim - 1)
+                tf.zeros_like(traj["actions"][0, 0, :-1]),  # shape (action_dim - 1)
+            )
+            # for gripper actions, repeat the last action after the goal is reached
+            new_gripper = tf.where(
+                (
+                    traj["goal_dists"][:, None]
+                    > tf.range(self.act_pred_horizon)[None, :]
+                ),  # shape (traj_len, act_pred_horizon)
+                traj["actions"][:, :, -1],  # shape (traj_len, act_pred_horizon)
+                tf.gather(
+                    # shifts `actions` to the right by one, padding with the first action
+                    tf.concat(
+                        [
+                            tf.concat(
+                                [
+                                    traj["actions"][:1, :1, -1],
+                                    traj["actions"][:1, :-1, -1],
+                                ],
+                                axis=1,
+                            ),
+                            traj["actions"][:-1, :, -1],
+                        ],
+                        axis=0,
+                    ),
+                    # selects the action at index `goal_dists` in the previous action chunk
+                    tf.minimum(traj["goal_dists"], self.act_pred_horizon - 1),
+                    batch_dims=1,
+                )[:, None],
+            )
+            traj["actions"] = tf.concat([new_movement, new_gripper[:, :, None]], axis=2)
         if "obs_chunks" in traj:
             traj["observations"] = traj.pop("obs_chunks")
             traj["next_observations"] = traj.pop("next_obs_chunks")
@@ -415,6 +466,7 @@ class BridgeDataset:
                 image[key]["image"], sub_seed, **self.augment_kwargs
             )
         return image
+
 
     def iterator(self):
         return self.tf_dataset.prefetch(tf.data.AUTOTUNE).as_numpy_iterator()
